@@ -18,6 +18,12 @@ v2/               未來重構設計，現在本機留空
 README.md         這份發布與分享說明
 ```
 
+V1 的資料結構入口：
+
+- `v1/data/index.html`：資料結構總覽
+- `v1/data/database-schema.html`：34 張 public 資料表的 schema 字典
+- `v1/data/cache-structure.html`：瀏覽器、本機與 process 暫存資料
+
 注意：Git 不會追蹤空資料夾，所以 `v2/` 如果完全空白，推到 GitHub 後不會出現在 repository。等要開始設計 v2 時，放入第一個 `index.html` 或文件即可。
 
 ## 推到 GitHub
