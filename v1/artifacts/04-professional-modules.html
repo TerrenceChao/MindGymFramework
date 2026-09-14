@@ -1,0 +1,25 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>專業模組生命週期與交易邊界 · MindGym</title><link rel="stylesheet" href="../../assets/site.css"></head><body><a class="skip" href="#main">跳至內容</a><header><a class="brand" href="../../index.html">MindGym <span>Architecture atlas</span></a><nav><a href="../index.html">V1 現況</a><a href="../web/index.html">Web</a><a href="../app/index.html">App</a><span>V2 待設計</span></nav></header><div class="layout"><aside><small>探索現有系統</small><a  href="../index.html">現況系統地圖</a><a  href="../web/index.html">Web 畫面與業務入口</a><a  href="../web/practice.html">測驗與日常練習</a><a  href="../web/reviews.html">回顧如何被觸發</a><a  href="../web/professional.html">模組發布與個案回饋</a><a  href="../web/community.html">社群分享與資料副作用</a><a  href="../app/index.html">iOS App：共用畫面與原生邊界</a><a  href="../app/native-flows.html">原生登入、通知與資料流</a><hr><a href="../legacy.html">舊索引與詳細附錄</a></aside><main id="main"><p class="eyebrow">V1 / 歷史詳細附錄</p><p class="risks">保留原始分析，內含尚未採納的重構建議與舊發布說明。現行導航與維護方式請以根目錄 README 為準；v2 仍空白。下方 Mermaid 為原始圖碼，新版已將主要流程重畫為可直接瀏覽的圖。</p><h1 id="專業模組生命週期與交易邊界">專業模組生命週期與交易邊界</h1>
+<p><a href="../README.html">回索引</a> · 基準 <code>1e2f8cd</code> · 2026-09-14</p>
+<h2 id="主流程">主流程</h2>
+<pre class="language-mermaid"><code>flowchart LR
+  D[專業夥伴保存草稿] --&gt; S[Python：驗證 owner / role / status]
+  S --&gt; AI[AI 審核標籤]
+  AI --&gt; P[pending_review 與送審紀錄]
+  P --&gt; A[管理員 RPC]
+  A --&gt;|核准| PUB[draft 複製到 published_content]
+  A --&gt;|退回| REJ[rejected]
+  REJ --&gt; D
+  PUB --&gt; INV[邀請碼預覽與兌換]
+  INV --&gt; ENR[active enrollment]
+  ENR --&gt; USE[個案讀取已發布內容]</code></pre>
+<p><code>pro_modules</code> 保存內容與狀態，<code>pro_module_review_log</code> 保存軌跡，<code>invite_codes</code> 與 <code>pro_enrollments</code> 分別管理加入途徑與持續關係。三種內容類型是 practice、diary、assessment。 草稿與已發布內容分開，使編輯不需要立即覆蓋個案所見內容；這個業務能力應保留。</p>
+<h2 id="現有交易邊界不一致">現有交易邊界不一致</h2>
+<p><code>approve_module</code>／<code>reject_module</code>／<code>takedown_module</code> 在 SQL 函式內更新狀態並寫軌跡。 Python 的 <code>pro_submit_module</code> 卻先 PATCH 模組、再 POST 紀錄，兩個呼叫沒有共同交易，也不檢查 status code。 HTTP 4xx／5xx 不一定讓 httpx 拋出例外，因此可能回 <code>ok=True</code> 但狀態或軌跡未保存。</p>
+<p>Python 先讀草稿、等 AI、再更新；<code>update_module_draft</code> 只檢查 owner，未凍結送審內容。 管理員核准 RPC 又從當下的 <code>draft_content</code> 複製到 published，未核對先前送審版本。 因此可能出現「AI 看 A，人工核准時發布 B」；不是加個資料夾就會消失的耦合。 管理員 RPC 有角色檢查，但 UPDATE 未限制原始狀態，合法轉換規則也需重新明定。</p>
+<h2 id="設計提案">設計提案</h2>
+<p>將這條流程封裝為 <code>SubmitModule</code>、<code>ApproveModule</code>、<code>RejectModule</code>、<code>RedeemInvite</code> 等用例。 每個用例指定 actor、允許的前置狀態與版本。送審建立不可變內容快照或 revision，AI 與人工都引用同一 revision。 狀態更新＋審核紀錄同交易，使用條件更新／版本檢查防止過期操作。 AI 不可用時記錄 failed／unavailable 的標籤狀態，仍可進人工審核，保留既有行為。</p>
+<p>先讓 Python 調用承擔交易的 RPC 也是可行遷移步驟，不必一次將所有 SQL 業務搬走。 若日後改由 repository 直接管理交易，必須保留相同角色、狀態與資料可見性限制。</p>
+<h2 id="驗收">驗收</h2>
+<p>兩次送審不產生互相矛盾的軌跡；AI 等待中編輯草稿不更換送審版本；未核准草稿不對個案可見； 另一位 practitioner 不能修改他人模組；邀請碼失效與 enrollment 停止後的行為符合既有產品契約。</p>
+<h2 id="檔案索引">檔案索引</h2>
+<ul><li><code>FastAPI · MindGym/backend/app.py</code>：<code>_pro_ai_review</code>、<code>pro_submit_module</code>。</li><li><code>模組與管理員 RPC · MindGym/supabase/pro_modules.sql</code>、<code>v2 邀請與讀取 RPC · MindGym/supabase/pro_modules_v2.sql</code>。</li><li><code>專業夥伴介面 · MindGym/src/routes/therapist.tsx</code>、<code>管理介面 · MindGym/src/routes/admin.tsx</code>。</li><li><code>前端模組存取 · MindGym/src/lib/proModules.ts</code>：<code>redeemInviteCode</code>、<code>getMyModules</code>、<code>stopEnrollment</code>。</li></ul><footer>依 MindGym commit 1e2f8cd · 2026-09-14 靜態分析。圖中箭頭表示資料或控制流；非正式環境與真機驗證。</footer></main></div></body></html>

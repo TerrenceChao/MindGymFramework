@@ -1,0 +1,26 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>架構全貌、信任邊界與權益現況 · MindGym</title><link rel="stylesheet" href="../../assets/site.css"></head><body><a class="skip" href="#main">跳至內容</a><header><a class="brand" href="../../index.html">MindGym <span>Architecture atlas</span></a><nav><a href="../index.html">V1 現況</a><a href="../web/index.html">Web</a><a href="../app/index.html">App</a><span>V2 待設計</span></nav></header><div class="layout"><aside><small>探索現有系統</small><a  href="../index.html">現況系統地圖</a><a  href="../web/index.html">Web 畫面與業務入口</a><a  href="../web/practice.html">測驗與日常練習</a><a  href="../web/reviews.html">回顧如何被觸發</a><a  href="../web/professional.html">模組發布與個案回饋</a><a  href="../web/community.html">社群分享與資料副作用</a><a  href="../app/index.html">iOS App：共用畫面與原生邊界</a><a  href="../app/native-flows.html">原生登入、通知與資料流</a><hr><a href="../legacy.html">舊索引與詳細附錄</a></aside><main id="main"><p class="eyebrow">V1 / 歷史詳細附錄</p><p class="risks">保留原始分析，內含尚未採納的重構建議與舊發布說明。現行導航與維護方式請以根目錄 README 為準；v2 仍空白。下方 Mermaid 為原始圖碼，新版已將主要流程重畫為可直接瀏覽的圖。</p><h1 id="架構全貌-信任邊界與權益現況">架構全貌、信任邊界與權益現況</h1>
+<p><a href="../README.html">回索引</a> · 基準 <code>1e2f8cd</code> · 2026-09-14</p>
+<h2 id="現況-一個業務有多個執行位置">現況：一個業務有多個執行位置</h2>
+<pre class="language-mermaid"><code>flowchart LR
+  UI[React / 行動 App] --&gt; AUTH[Supabase Auth]
+  UI --&gt; API[FastAPI：AI 與部分業務編排]
+  UI --&gt; REST[PostgREST：資料表與 RPC]
+  API --&gt; AUTH
+  API --&gt; REST
+  API --&gt; AI[Claude / Whisper]
+  REST --&gt; DB[PostgreSQL：資料、RLS、函式、trigger]
+  DB --&gt; NET[pg_net]
+  NET --&gt; EDGE[Edge Functions]
+  EDGE --&gt; PUSH[APNs]
+  UI --&gt; DELETE[delete-account Edge Function]</code></pre>
+<p><code>backend/</code> 的 Python 檔案只有主程式、用量計算與補做腳本。主程式有 15 個 POST 與 1 個健康檢查 GET， 共用 HTTP／Claude client，route handler 同時包含驗證、查詢、prompt、業務規則與寫入。 核心資料經 Supabase REST 存取，沒有在 Python 裡直接開啟跨多個 REST 請求的資料庫交易。</p>
+<table><thead><tr><th>路徑</th><th>身分與授權</th><th>主要責任</th></tr></thead><tbody><tr><td>前端 → Supabase</td><td>anon key＋登入 session；RLS／RPC 驗證</td><td>日記 CRUD、社群、草稿 RPC、邀請加入、讀回顧</td></tr><tr><td>前端 → FastAPI</td><td><code>get_user_id</code> 向 Auth 驗證 token；handler 檢查 ownership／enrollment／role</td><td>AI、PERMA 保存、送審、安全判讀、報告</td></tr><tr><td>FastAPI → Supabase</td><td>共用 <code>SUPABASE_KEY</code>；註解與使用模式按 service key 設計</td><td>需由後端自行限制使用者與資料範圍</td></tr><tr><td>資料庫 → Edge</td><td>推播使用 webhook secret</td><td>外部推播</td></tr></tbody></table>
+<p>沒有讀取環境金鑰，實際 <code>SUPABASE_KEY</code> 權限待部署設定確認。若為 service role，不可假設終端使用者的 RLS 會替這些請求檢查權限。</p>
+<h2 id="有資料表-不代表那條產品規則仍有效">有資料表，不代表那條產品規則仍有效</h2>
+<p>Python <code>_subscription_tier()</code> 固定回 <code>pro</code>，<code>_annotate_review_lock()</code> 固定 <code>locked=False</code>。 SQL <code>is_pro(uid)</code> 對非 NULL uid 回 true，<code>get_my_entitlements()</code> 的分析上限為 -1。 但 RPC 的 <code>tier</code> 仍取訂閱資料列，可能是 <code>free</code> 且 <code>is_pro=true</code>；前端須以有效權益而非標籤推導功能。 因此 <code>subscriptions</code>、創始成員標籤與 <code>paywall_intents</code> 不等於已接通正式收款流程。</p>
+<p>重構時應統一「有效權益」的決策入口，保留會員資料與量測資料的用途。不要僅憑舊註解恢復收費或額度。</p>
+<h2 id="優先核對的權限缺口">優先核對的權限缺口</h2>
+<p><code>pro_reviews</code> 的 UPDATE policy 名稱叫「本人可標已讀」，內容只限制 <code>user_id</code>，並沒有在該 policy 中限制可改欄位。 若線上有一般 UPDATE grant 且沒有額外欄位限制，使用者可能也能修改 <code>content</code> 等欄位。 這是靜態風險，需查實際 grants 後確認；建議改成只標已讀的 RPC／欄位權限，而非把安全性寄託在前端只送 <code>read_at</code>。</p>
+<h2 id="速讀與證據">速讀與證據</h2>
+<ul><li><code>主程式 · MindGym/backend/app.py</code>：<code>lifespan</code>、<code>SUPABASE_HEADERS</code>、<code>get_user_id</code>、<code>_subscription_tier</code>、<code>_annotate_review_lock</code>。</li><li><code>前端 Supabase client · MindGym/src/lib/supabase.ts</code>、<code>權益讀取 · MindGym/src/lib/entitlements.ts</code>。</li><li><code>訂閱與有效權益 SQL · MindGym/supabase/subscriptions.sql</code>：<code>is_pro</code>、<code>get_my_entitlements</code>。</li><li><code>專業模組 v2 SQL · MindGym/supabase/pro_modules_v2.sql</code>：<code>pro_reviews</code> policies。</li></ul>
+<p>驗收：使用本人、另一位使用者、專業夥伴與管理員四種身分檢查相同資源；同時覆蓋 API 與直連 Supabase。 目前沒有連線執行這些權限驗證。</p><footer>依 MindGym commit 1e2f8cd · 2026-09-14 靜態分析。圖中箭頭表示資料或控制流；非正式環境與真機驗證。</footer></main></div></body></html>

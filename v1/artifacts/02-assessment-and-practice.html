@@ -1,0 +1,30 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>測驗、日常練習與資料落地 · MindGym</title><link rel="stylesheet" href="../../assets/site.css"></head><body><a class="skip" href="#main">跳至內容</a><header><a class="brand" href="../../index.html">MindGym <span>Architecture atlas</span></a><nav><a href="../index.html">V1 現況</a><a href="../web/index.html">Web</a><a href="../app/index.html">App</a><span>V2 待設計</span></nav></header><div class="layout"><aside><small>探索現有系統</small><a  href="../index.html">現況系統地圖</a><a  href="../web/index.html">Web 畫面與業務入口</a><a  href="../web/practice.html">測驗與日常練習</a><a  href="../web/reviews.html">回顧如何被觸發</a><a  href="../web/professional.html">模組發布與個案回饋</a><a  href="../web/community.html">社群分享與資料副作用</a><a  href="../app/index.html">iOS App：共用畫面與原生邊界</a><a  href="../app/native-flows.html">原生登入、通知與資料流</a><hr><a href="../legacy.html">舊索引與詳細附錄</a></aside><main id="main"><p class="eyebrow">V1 / 歷史詳細附錄</p><p class="risks">保留原始分析，內含尚未採納的重構建議與舊發布說明。現行導航與維護方式請以根目錄 README 為準；v2 仍空白。下方 Mermaid 為原始圖碼，新版已將主要流程重畫為可直接瀏覽的圖。</p><h1 id="測驗-日常練習與資料落地">測驗、日常練習與資料落地</h1>
+<p><a href="../README.html">回索引</a> · 基準 <code>1e2f8cd</code> · 2026-09-14</p>
+<h2 id="perma-回應成功與保存成功分離">PERMA：回應成功與保存成功分離</h2>
+<pre class="language-mermaid"><code>sequenceDiagram
+  participant U as 前端
+  participant A as FastAPI
+  participant L as Claude
+  participant D as Supabase
+  U-&gt;&gt;A: POST /api/report：五面向敘事
+  A-&gt;&gt;D: 驗證登入 token
+  A-&gt;&gt;L: 結構化分析
+  L--&gt;&gt;A: 分數與分析
+  A-&gt;&gt;A: 總分、體質、平衡與建議
+  A-&gt;&gt;D: INSERT perma_scores
+  alt 寫入失敗
+    A-&gt;&gt;A: 記錄錯誤
+  end
+  A--&gt;&gt;U: 回傳報告（寫入失敗也可能走這裡）
+  U-&gt;&gt;D: 下次進入時讀取最近報告</code></pre>
+<p><code>report_json.scores</code> 保留小數；<code>p_score</code> 等摘要欄位四捨五入後限制在 1–5。 前端優先讀完整 <code>report_json</code>，缺少時才用摘要分數重建。這兩種呈現精度不同，不應在遷移時只保留整數欄位。 前端請求 90 秒逾時也不等於伺服器確定沒有保存；現有 API 沒有業務請求識別碼可讓重試查回同一次結果。</p>
+<h2 id="日常練習-ai-與保存分成不同呼叫">日常練習：AI 與保存分成不同呼叫</h2>
+<table><thead><tr><th>業務</th><th>AI 入口</th><th>主要保存／附加資料</th></tr></thead><tbody><tr><td>感恩</td><td><code>/api/gratitude-summary</code>、<code>/api/tag-gratitude-targets</code></td><td>前端 <code>saveGratitudeEntry</code> → <code>gratitude_entries</code></td></tr><tr><td>過程目標</td><td><code>/api/pg/focus-insight</code>、<code>/api/pg/focus-boost</code></td><td>前端 → <code>focus_logs</code>，分享另寫 <code>gratitude_entries</code></td></tr><tr><td>WOOP</td><td><code>/api/woop/coach</code></td><td>前端流程與共用社群保存，另有 <code>increment_perma_xp</code> RPC</td></tr><tr><td>專業日記</td><td><code>/api/pro/diary-feedback</code></td><td>先由前端寫 <code>pro_entries</code>，再取得 AI 回饋</td></tr></tbody></table>
+<p><code>gratitude_entries</code> 還承載其他 <code>practice_type</code> 的日記／分享，名稱不能直接當成完整的領域定義。 <code>saveGratitudeEntry</code> 在插入後另行安排按讚與更新 streak；這些步驟沒有和日記插入形成同一個交易。 重構應辨識哪些是不可丟的原始紀錄，哪些只是可重算的顯示資料。</p>
+<h2 id="提案-定義-完成練習-的契約">提案：定義「完成練習」的契約</h2>
+<ol><li>保存原始作答，回傳穩定的 <code>entry_id</code> 與保存狀態；同一次提交帶去重鍵。</li><li>AI 結果記錄輸入版本、產生狀態與模型／prompt 版本，明確區分待處理、成功、降級及失敗。</li><li>streak、XP 與分享各有業務規則。必須與提交一起成立的部分進交易；可重建的統計走可重試投影。</li><li>PERMA 要明確選擇「保存後才算成功」或「未保存結果仍可預覽」，API 與畫面均表達此選擇。</li></ol>
+<p>這些為設計建議，尚未改變現有端點或保存順序。</p>
+<h2 id="故障驗收">故障驗收</h2>
+<p>同一提交重送不新增第二筆；AI 失敗仍可找回原始作答；保存失敗不可回成已保存； streak／按讚失敗不撤銷已保存日記；歷史 PERMA 完整 JSON 與整數欄位都能重讀。</p>
+<h2 id="檔案索引">檔案索引</h2>
+<ul><li><code>FastAPI · MindGym/backend/app.py</code>：<code>generate_report</code>、<code>pg_focus_insight</code>、<code>pg_focus_boost</code>、<code>woop_coach</code>。</li><li><code>測驗前端 · MindGym/src/routes/onboarding.tsx</code>：<code>fetchLatestReport</code>、<code>handleSubmit</code>。</li><li><code>感恩保存 · MindGym/src/lib/gratitudeEntry.ts</code>：<code>saveGratitudeEntry</code>；<code>共用社群保存 · MindGym/src/lib/communityPost.ts</code>。</li><li><code>過程目標 · MindGym/src/routes/app.process-goal.tsx</code>、<code>WOOP · MindGym/src/routes/app.woop.tsx</code>。</li><li><code>資料表 · MindGym/supabase/schema.sql</code>、<code>過程目標 SQL · MindGym/supabase/process_goal.sql</code>、<code>XP RPC · MindGym/supabase/perma_xp.sql</code>。</li></ul><footer>依 MindGym commit 1e2f8cd · 2026-09-14 靜態分析。圖中箭頭表示資料或控制流；非正式環境與真機驗證。</footer></main></div></body></html>

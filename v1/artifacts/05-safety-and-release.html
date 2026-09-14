@@ -1,0 +1,24 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>安全判讀、個案紀錄與報告發布 · MindGym</title><link rel="stylesheet" href="../../assets/site.css"></head><body><a class="skip" href="#main">跳至內容</a><header><a class="brand" href="../../index.html">MindGym <span>Architecture atlas</span></a><nav><a href="../index.html">V1 現況</a><a href="../web/index.html">Web</a><a href="../app/index.html">App</a><span>V2 待設計</span></nav></header><div class="layout"><aside><small>探索現有系統</small><a  href="../index.html">現況系統地圖</a><a  href="../web/index.html">Web 畫面與業務入口</a><a  href="../web/practice.html">測驗與日常練習</a><a  href="../web/reviews.html">回顧如何被觸發</a><a  href="../web/professional.html">模組發布與個案回饋</a><a  href="../web/community.html">社群分享與資料副作用</a><a  href="../app/index.html">iOS App：共用畫面與原生邊界</a><a  href="../app/native-flows.html">原生登入、通知與資料流</a><hr><a href="../legacy.html">舊索引與詳細附錄</a></aside><main id="main"><p class="eyebrow">V1 / 歷史詳細附錄</p><p class="risks">保留原始分析，內含尚未採納的重構建議與舊發布說明。現行導航與維護方式請以根目錄 README 為準；v2 仍空白。下方 Mermaid 為原始圖碼，新版已將主要流程重畫為可直接瀏覽的圖。</p><h1 id="安全判讀-個案紀錄與報告發布">安全判讀、個案紀錄與報告發布</h1>
+<p><a href="../README.html">回索引</a> · 基準 <code>1e2f8cd</code> · 2026-09-14</p>
+<h2 id="專業日記-保存之後才由前端要求判讀">專業日記：保存之後才由前端要求判讀</h2>
+<p><code>DiaryPlayer.submit</code> 先插入 <code>pro_entries</code>，再呼叫安全 API；請求失敗時才用本地關鍵字檢查與警示插入備援。 接著產生每日回饋，再視門檻要求回顧。使用者保存後關閉頁面，後續步驟可能沒有完成。</p>
+<table><thead><tr><th>分支</th><th>現況</th><th>架構含義</th></tr></thead><tbody><tr><td>API 關鍵字命中</td><td>寫警示並回 high</td><td>警示寫入 helper 未檢查 HTTP 狀態，不能等同確定保存</td></tr><tr><td>AI 判讀成功</td><td>接受 medium／high，其他保留 none</td><td>需更完整的結果 schema 驗證</td></tr><tr><td>AI 例外</td><td>記 warning，回 HTTP 成功的 none</td><td>前端 catch 不會啟動，未判讀與無風險混在一起</td></tr><tr><td>找不到 entry／active enrollment</td><td>回 none</td><td>業務拒絕與判讀結果混在一起</td></tr><tr><td>前端安全請求失敗或逾時</td><td>本地關鍵字備援</td><td>僅涵蓋客戶端仍在執行且能匹配關鍵字的情況</td></tr></tbody></table>
+<p>安全 API 雖驗證 entry 屬於本人，但分析的是 <code>req.texts</code>；它並未取出已保存的 <code>answers</code> 做對照。 這讓「這筆紀錄已被檢查」缺少可驗證的內容依據。</p>
+<h2 id="質性測驗-同次-ai-生成兩個視角">質性測驗：同次 AI 生成兩個視角</h2>
+<pre class="language-mermaid"><code>flowchart LR
+  A[已加入個案提交答案] --&gt; S[關鍵字 / AI 安全判讀]
+  S --&gt; R[生成 practitioner_report 與 client_report]
+  R --&gt; DB[保存 pro_assessment_results]
+  DB --&gt;|需人工或生成降級| P[pending_release]
+  DB --&gt;|不需人工| REL[released]
+  P --&gt; RPC[專業夥伴 release RPC]
+  RPC --&gt; REL
+  REL --&gt; READ[個案 RPC 僅取得 client_report]
+  DB --&gt; ALERT[有判出風險才另寫 crisis_alerts]</code></pre>
+<p>目前 <code>review_before_send</code> 或 fallback 報告中的 error 決定待發布狀態，<strong>風險值本身不是暫停發布條件</strong>。 這是應由產品／專業流程明定的決策，不在本次文件工作中擅自改變。 測驗報告保存失敗會報錯；警示在保存之後另外插入，仍有部分完成的風險。 沒有提交去重鍵，重送可能新增第二份結果並重複產生 AI 成本。</p>
+<p>既有 SQL 的個案讀取 RPC 在 <code>pending_release</code> 時遮蔽 <code>client_report</code>，並不輸出 practitioner 版本； 這是遷移必須保留的輸出邊界，不能直接把整列結果當通用 DTO 回前端。</p>
+<h2 id="設計提案與驗收">設計提案與驗收</h2>
+<p>拆開「處理狀態」與「判讀結果」：例如 pending／running／completed／failed，只有完成才有 risk。 以已保存答案與內容版本建立待處理工作；原始紀錄與待處理工作同交易，支援重試及人工處理失敗項目。 警示用有效唯一鍵防重並確認保存；保留後續確認、處理時間等可稽核資料。 即時 UI 求助資源與持久判讀工作各有責任，不能只依賴使用者頁面存活。</p>
+<p>驗收包含：保存後關頁仍能完成待處理項目、AI 故障呈現未完成而非 none、修改答案使舊判讀失效、 重試不重複警示、未發布內容不洩漏、另一位 practitioner 不可發布。 此處分析的是軟體控制流程，沒有驗證判讀模型的臨床品質或替其效果背書。</p>
+<h2 id="檔案索引">檔案索引</h2>
+<ul><li><code>FastAPI · MindGym/backend/app.py</code>：<code>pro_entry_safety_check</code>、<code>_insert_crisis_alert</code>、<code>pro_diary_feedback</code>、<code>pro_assessment_report</code>。</li><li><code>日記提交 · MindGym/src/components/pro/DiaryPlayer.tsx</code>、<code>前端安全備援 · MindGym/src/lib/proModules.ts</code>。</li><li><code>警示與 enrollment SQL · MindGym/supabase/pro_modules.sql</code>。</li><li><code>雙報告與發布 RPC · MindGym/supabase/pro_modules_v2.sql</code>：<code>release_assessment_result</code>、<code>get_my_assessment_results</code>。</li></ul><footer>依 MindGym commit 1e2f8cd · 2026-09-14 靜態分析。圖中箭頭表示資料或控制流；非正式環境與真機驗證。</footer></main></div></body></html>

@@ -1,0 +1,21 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>社群、通知與外部服務的責任邊界 · MindGym</title><link rel="stylesheet" href="../../assets/site.css"></head><body><a class="skip" href="#main">跳至內容</a><header><a class="brand" href="../../index.html">MindGym <span>Architecture atlas</span></a><nav><a href="../index.html">V1 現況</a><a href="../web/index.html">Web</a><a href="../app/index.html">App</a><span>V2 待設計</span></nav></header><div class="layout"><aside><small>探索現有系統</small><a  href="../index.html">現況系統地圖</a><a  href="../web/index.html">Web 畫面與業務入口</a><a  href="../web/practice.html">測驗與日常練習</a><a  href="../web/reviews.html">回顧如何被觸發</a><a  href="../web/professional.html">模組發布與個案回饋</a><a  href="../web/community.html">社群分享與資料副作用</a><a  href="../app/index.html">iOS App：共用畫面與原生邊界</a><a  href="../app/native-flows.html">原生登入、通知與資料流</a><hr><a href="../legacy.html">舊索引與詳細附錄</a></aside><main id="main"><p class="eyebrow">V1 / 歷史詳細附錄</p><p class="risks">保留原始分析，內含尚未採納的重構建議與舊發布說明。現行導航與維護方式請以根目錄 README 為準；v2 仍空白。下方 Mermaid 為原始圖碼，新版已將主要流程重畫為可直接瀏覽的圖。</p><h1 id="社群-通知與外部服務的責任邊界">社群、通知與外部服務的責任邊界</h1>
+<p><a href="../README.html">回索引</a> · 基準 <code>1e2f8cd</code> · 2026-09-14</p>
+<h2 id="分享改變資料可見性-也啟動資料庫規則">分享改變資料可見性，也啟動資料庫規則</h2>
+<p>部分練習與社群共用 <code>gratitude_entries</code>，以 <code>practice_type</code>、<code>is_shared</code> 等區分內容與分享狀態。 前端先做公開內容檢查，資料庫 <code>enforce_content_moderation</code> 再做強制判定；配合自動待審、檢舉與管理員 RPC。 因此 moderation 是保存契約的一部分，不只是頁面上的字詞過濾。 <code>subscriptions.sql</code> 也定義同名社群讀取 policy，部署時要核對各 SQL 的套用順序與最後生效定義。</p>
+<h2 id="兩條背景工作需要不同的可靠性">兩條背景工作需要不同的可靠性</h2>
+<pre class="language-mermaid"><code>flowchart LR
+  W[按讚 / 留言保存] --&gt; T[DB trigger]
+  T --&gt; N[pg_net HTTP]
+  N --&gt; E[push-notify Edge Function]
+  E --&gt; A[APNs]
+  L[Python AI 呼叫完成] --&gt; C[asyncio.create_task]
+  C --&gt; U[ai_usage_log]</code></pre>
+<p>推播 trigger 包住 enqueue 階段例外，避免推播設定錯誤回滾留言。HTTP enqueue 成功不等於送達 APNs 或使用者已讀。 <code>push-notify</code> 驗證 webhook secret、查裝置 token，對失效 token 有處理；本次閱讀範圍未見完整應用層持久重試閉環。 SQL 的 URL／secret 仍是待部署替換的 placeholder，不能據檔案判定線上推播已正確設定。</p>
+<p><code>meter_claude</code>／<code>meter_whisper</code> 用背景 task 寫成本；程序退出可能遺失，<code>_post_ai_usage</code> 也未檢查 HTTP 狀態碼。 <code>usage_metering.py</code> 使用程式內建價目表估算，不是付款帳單；本次沒有查證外部最新價格。 TypeScript Edge 另外有 <code>_shared/metering.ts</code>，未來成本策略要跨執行環境統一。</p>
+<h2 id="其他不能漏掉的執行位置">其他不能漏掉的執行位置</h2>
+<ul><li><code>/api/transcribe</code> 驗證登入、限制類型與 10 MB，配置 <code>20/minute</code> IP 限流；async handler 內直接呼叫同步 OpenAI client，可能阻塞 event loop。建議換非同步 adapter 或有界執行緒，並統一逾時策略。</li><li>其他 AI POST 未見同樣的 limiter decorator。不要從語音有限流推論全站已有 AI 成本保護。</li><li>Edge 的 <code>delete-account</code> 先驗證登入，再以 admin client 刪除該 Auth 使用者。要遷移時需盤點 FK cascade、裝置與相關資料清理，不可只刪 <code>profiles</code> 便宣稱流程等價。</li><li>Python 與 Edge 都有名為 gratitude-summary 的實作；已讀取的前端 <code>fetchGratitudeSummary</code> 指向 Python。不能僅看同名函式就認定 Edge 版本仍有流量。</li><li><code>/healthz</code> 回套件版本與 commit，是存活／版本資訊，沒有查 DB 或 AI 可用性，不能當完整就緒檢查。</li></ul>
+<h2 id="提案與驗收">提案與驗收</h2>
+<p>把 notification、AI provider、cost recorder 定義為介面，業務用例決定失敗語意。 需要可靠投遞者採持久工作與有限重試；可容許遺失者明確標示並監測遺失率。 不要讓一般通知與安全警示共用「失敗忽略」預設。 補上外部 HTTP 狀態檢查、request／job 關聯 ID、模型用量與各 use case 失敗率。</p>
+<p>驗收：推播掛掉仍可保存留言；公開內容審查無法被直接 DB 呼叫繞過；語音慢請求不拖住其他請求； 成本記錄故障可觀測；若要求可靠投遞，程序重啟後仍找得到未完成工作。</p>
+<h2 id="檔案索引">檔案索引</h2>
+<ul><li><code>社群保存 · MindGym/src/lib/communityPost.ts</code>、<code>內容審查 SQL · MindGym/supabase/community_safety.sql</code>。</li><li><code>推播 trigger · MindGym/supabase/push_notifications.sql</code>、<code>推播 Edge · MindGym/supabase/functions/push-notify/index.ts</code>。</li><li><code>Python 用量估算 · MindGym/backend/usage_metering.py</code>、<code>主程式 · MindGym/backend/app.py</code>、<code>Edge 記帳 · MindGym/supabase/functions/_shared/metering.ts</code>。</li><li><code>刪除帳號 · MindGym/supabase/functions/delete-account/index.ts</code>、<code>Edge 感恩摘要 · MindGym/supabase/functions/gratitude-summary/index.ts</code>。</li></ul><footer>依 MindGym commit 1e2f8cd · 2026-09-14 靜態分析。圖中箭頭表示資料或控制流；非正式環境與真機驗證。</footer></main></div></body></html>

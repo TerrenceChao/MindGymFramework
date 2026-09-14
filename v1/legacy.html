@@ -1,0 +1,55 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>歷史索引（含舊提案） · MindGym</title><link rel="stylesheet" href="../assets/site.css"></head><body><a class="skip" href="#main">跳至內容</a><header><a class="brand" href="../index.html">MindGym <span>Architecture atlas</span></a><nav><a href="index.html">V1 現況</a><a href="web/index.html">Web</a><a href="app/index.html">App</a><span>V2 待設計</span></nav></header><div class="layout"><aside><small>探索現有系統</small><a  href="index.html">現況系統地圖</a><a  href="web/index.html">Web 畫面與業務入口</a><a  href="web/practice.html">測驗與日常練習</a><a  href="web/reviews.html">回顧如何被觸發</a><a  href="web/professional.html">模組發布與個案回饋</a><a  href="web/community.html">社群分享與資料副作用</a><a  href="app/index.html">iOS App：共用畫面與原生邊界</a><a  href="app/native-flows.html">原生登入、通知與資料流</a><hr><a href="legacy.html">舊索引與詳細附錄</a></aside><main id="main"><p class="eyebrow">V1 / 歷史詳細附錄</p><p class="risks">保留原始分析，內含尚未採納的重構建議與舊發布說明。現行導航與維護方式請以根目錄 README 為準；v2 仍空白。下方 Mermaid 為原始圖碼，新版已將主要流程重畫為可直接瀏覽的圖。</p><h1 id="mindgymframework-後端機制圖解索引">MindGymFramework — 後端機制圖解索引</h1>
+<p>給想理解 MindGym 既有業務、並據此重構後端的人看的機制說明。每一則是「一段摘要 + 一個詳細文件連結」， 細節（流程圖、故障分支、責任邊界、檔案索引與驗收條件）放在連結裡。</p>
+<p>分析基準：<code>MindGym</code> 本機 commit <code>1e2f8cd</code>，2026-09-14；當時工作樹乾淨。 以程式與 SQL 為證據，<strong>描述的是儲存庫現況，不代表已驗證正式環境的 migration、權限或部署設定</strong>。 以下 artifact 先以本地 HTML 文件提供，沒有建立或假設存在 Claude artifact／公開網址。</p>
+<h2 id="github-pages-靜態瀏覽">GitHub Pages 靜態瀏覽</h2>
+<p>這個資料夾可以當成純靜態網站，不需要啟動本機 server。入口檔是 <code>index.html</code>， GitHub Pages 會自動顯示它；<code>artifacts/*.html</code> 保留詳細附錄。</p>
+<p>建議做法：</p>
+<ol><li>在 GitHub 建一個 repository，例如 <code>MindGymFramework</code>。</li><li>把 <code>local-storage/MindGymFramework</code> 這個資料夾的內容放在 repository 根目錄。</li><li>到 repository 的 <code>Settings</code> → <code>Pages</code>。</li><li><code>Build and deployment</code> 選 <code>Deploy from a branch</code>。</li><li><code>Branch</code> 選 <code>main</code>，資料夾選 <code>/(root)</code>，然後儲存。</li></ol>
+<p>這個 GitHub Pages 版本不需要 <code>web/</code>、<code>npm</code> 或本機 server；<code>.gitignore</code> 已忽略 <code>web/</code>。</p>
+<p>發布後網址通常會是：</p>
+<pre class="language-text"><code>https://&lt;你的 GitHub 帳號&gt;.github.io/&lt;repository 名稱&gt;/</code></pre>
+<p>之後如果改了 Markdown 原稿，重產 HTML：</p>
+<pre class="language-bash"><code>node tools/generate-html.mjs</code></pre>
+<hr />
+<h2 id="mindgym-的後端-到底在哪裡">MindGym 的後端，到底在哪裡？</h2>
+<p>使用者登入後，有些操作呼叫 FastAPI，有些直接寫 Supabase，有些則讓資料庫函式完成整段業務。 <code>backend/app.py</code> 有 2,253 行、16 個 HTTP 路由，但這只是後端的一部分：模組核准、邀請碼兌換、 資料可見性、社群審查與推播，都有責任落在 Python 以外。</p>
+<p>重點是<strong>先找出「誰有權改變哪一份資料」</strong>。前端使用 anon key 搭配使用者 session， Python 則驗證 token 後以共用 <code>SUPABASE_KEY</code> 存取資料，程式按 service key 的用途設計。 重構必須同時處理 API 的擁有者檢查與資料庫 RLS（資料列權限），否則資料夾分乾淨了，業務仍然散落各處。 目前訂閱規則也值得先看：所有登入者享有 Pro 權益，舊付費牆與訂閱資料還在，不能把舊註解當成有效限制。</p>
+<p>📄 <a href="artifacts/01-system-boundaries.html">架構全貌、信任邊界與權益現況</a></p>
+<p>*現況分析 · FastAPI × Supabase Auth／PostgREST／RLS／RPC × Edge Functions · 2026-09-14*</p>
+<hr />
+<h2 id="從一次測驗-到每天留下練習紀錄">從一次測驗，到每天留下練習紀錄</h2>
+<p>PERMA 測驗由 Python 呼叫 AI、計算衍生指標，再寫 <code>perma_scores</code>；日常感恩與過程目標練習， 則常由 Python 提供 AI 內容、前端完成資料落地。同樣是「使用者按下完成」，背後的成功定義並不一致。</p>
+<p>最值得先釐清的是：<strong>看到了結果，不一定表示結果已保存</strong>。<code>/api/report</code> 的資料庫寫入失敗只記 log， 仍會把報告回傳；而日記保存後，連續天數與機器人按讚又是分開發出的副作用。 重構切入點是把「完成一筆練習」定義成可重試的業務操作，區分原始內容、AI 衍生內容與統計投影， 避免重試多存一筆、或附加功能失敗讓使用者不知道練習究竟有沒有完成。</p>
+<p>📄 <a href="artifacts/02-assessment-and-practice.html">測驗、日常練習與資料落地</a></p>
+<p>*現況分析＋重構切入點 · PERMA／感恩／過程目標／WOOP · 2026-09-14*</p>
+<hr />
+<h2 id="週回顧如何生成-開啟頁面才發動的-自動化">週回顧如何生成：開啟頁面才發動的「自動化」</h2>
+<p>首頁會檢查上一週是否該生成回顧，專業日記提交後也會檢查門檻；一週回顧頁則要求產生情緒統整。 <strong>目前這些自動生成是前端觸發，不是已確認存在的後端週日排程</strong>。感恩週回顧要 3 筆感恩日記， <code>weekly_digest</code> 要 2 筆日記且另有週日規則，專業日記的「週」則按 7 個不同記錄日期計算。</p>
+<p>程式先查快取、再呼叫 AI、最後存報告；但這不等於只會付一次 AI 費用。 更關鍵的是，內建回顧的 <code>module_id</code> 為 NULL，儲存庫 SQL 的普通複合 UNIQUE 沒有完整保障這條分支的防重。 此外，整體回饋的快取鍵可能讓累積到下一個門檻後仍拿到第一份報告。 重構前先定義期間、輸入版本與任務身分，才能決定快取、補做與背景工作要怎麼接。</p>
+<p>📄 <a href="artifacts/03-reviews-and-jobs.html">回顧門檻、快取、防重與補做</a></p>
+<p>*現況分析＋待驗證風險 · 四種 review_type／台灣週界／併發生成 · 2026-09-14*</p>
+<hr />
+<h2 id="專業夥伴把模組交給個案-草稿-送審-發布與加入">專業夥伴把模組交給個案：草稿、送審、發布與加入</h2>
+<p>專業夥伴編輯草稿，Python 產生 AI 審核標籤，再送管理員審核；管理員透過 SQL RPC 發布， 個案透過邀請碼加入，之後讀取已發布內容。這是一條橫跨前端、Python 與資料庫的內容生命週期。</p>
+<p>值得保留的是 <strong><code>draft_content</code> 與 <code>published_content</code> 的分離</strong>，以及 AI 失敗仍可進人工審核。 真正的裂縫在送審：狀態更新與審核紀錄分成兩個 HTTP 寫入，而且沒有檢查回應狀態碼； AI 分析期間草稿又可能被修改。重構應把「送的是哪個版本、核准的是哪個版本」說清楚， 並讓狀態轉換與審核軌跡在同一個交易中成立。</p>
+<p>📄 <a href="artifacts/04-professional-modules.html">專業模組生命週期與交易邊界</a></p>
+<p>*現況分析＋重構切入點 · module／review_log／invite_code／enrollment · 2026-09-14*</p>
+<hr />
+<h2 id="個案寫完之後-安全判讀與雙報告發布">個案寫完之後：安全判讀與雙報告發布</h2>
+<p>專業日記先存 <code>pro_entries</code>，前端再要求安全判讀與每日回饋；質性測驗則由 Python 判讀、生成兩份報告、 保存後決定是否直接發布。給專業夥伴與個案的報告有不同可見性，個案透過 RPC 讀取發布後的內容。</p>
+<p>這裡最需要重構的是<strong>「沒有判讀成功」目前可能被表示成「沒有風險」</strong>：安全 AI 失敗回 <code>none</code>， 前端只在請求失敗時啟動本地關鍵字備援，收到了成功的 <code>none</code> 就不會啟動。 此外，日記安全判讀讀的是請求中的文字，不是已保存的答案；警示寫入也沒有確認 HTTP 成功。 應讓判讀有可追蹤的處理狀態，綁定答案版本，並將警示保存與後續處理建立為可補救的流程。</p>
+<p>📄 <a href="artifacts/05-safety-and-release.html">安全判讀、個案紀錄與報告發布</a></p>
+<p>*現況分析＋重構切入點 · safety check／crisis_alerts／assessment results · 2026-09-14*</p>
+<hr />
+<h2 id="分享到社群之後-審查-推播與-ai-成本各自怎麼失敗">分享到社群之後：審查、推播與 AI 成本各自怎麼失敗</h2>
+<p>私人練習與公開貼文共用部分資料結構，公開內容還會經過資料庫審查；按讚與留言又透過 trigger、 <code>pg_net</code> 和 Edge Function 接到 APNs 推播。Python 的 AI 成本紀錄則是 <code>asyncio.create_task</code> 背景寫入。</p>
+<p>這些副作用需要不同的可靠性：<strong>推播送不到可以不影響留言保存，安全警示卻不能沿用同樣的丟棄策略</strong>。 成本記錄目前也只是盡力而為，不能直接當成完整帳務。 重構應依業務要求決定哪些要持久任務與重試，並保留資料庫對公開內容的強制審查， 不要因為把 API 搬了位置，就讓直連 Supabase 的路徑繞過規則。</p>
+<p>📄 <a href="artifacts/06-community-and-platform.html">社群、通知與外部服務的責任邊界</a></p>
+<p>*現況分析＋重構切入點 · moderation／push／metering／語音／帳號刪除 · 2026-09-14*</p>
+<hr />
+<h2 id="根據業務流程重建後端-設計提案-尚未實作">根據業務流程重建後端（設計提案，尚未實作）</h2>
+<p>建議先建立<strong>按業務分模組的單體後端</strong>：身分權益、測驗與練習、專業模組、回顧、安全處理、社群， 各自管理規則與資料寫入；AI、Supabase 與通知則透過明確介面接入。 目前程式證據足以支持責任整理，尚不足以證明需要拆成多個獨立部署的服務。</p>
+<p>第一步是鎖住既有行為並盤點線上 SQL；接著補成功定義、權限、交易與防重，再逐條遷移寫入流程。 第一條試點可選「保存專業日記 → 安全判讀 → AI 回饋」，但必須先建立狀態與驗收條件， 才能安全地把前端編排移進後端。每次切換保留舊讀取契約、指定唯一寫入入口，避免雙寫造成新舊資料分歧。</p>
+<p>📄 <a href="artifacts/07-refactoring-roadmap.html">目標架構、遷移順序與驗收清單</a></p>
+<p>*設計提案，尚未實作 · 建議閱讀順序：全貌 → 練習 → 回顧 → 專業模組 → 安全 → 社群 → 路線圖 · 2026-09-14*</p>
+<hr /><footer>依 MindGym commit 1e2f8cd · 2026-09-14 靜態分析。圖中箭頭表示資料或控制流；非正式環境與真機驗證。</footer></main></div></body></html>

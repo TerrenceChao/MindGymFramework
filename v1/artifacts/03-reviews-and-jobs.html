@@ -1,0 +1,23 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>回顧門檻、快取、防重與補做 · MindGym</title><link rel="stylesheet" href="../../assets/site.css"></head><body><a class="skip" href="#main">跳至內容</a><header><a class="brand" href="../../index.html">MindGym <span>Architecture atlas</span></a><nav><a href="../index.html">V1 現況</a><a href="../web/index.html">Web</a><a href="../app/index.html">App</a><span>V2 待設計</span></nav></header><div class="layout"><aside><small>探索現有系統</small><a  href="../index.html">現況系統地圖</a><a  href="../web/index.html">Web 畫面與業務入口</a><a  href="../web/practice.html">測驗與日常練習</a><a  href="../web/reviews.html">回顧如何被觸發</a><a  href="../web/professional.html">模組發布與個案回饋</a><a  href="../web/community.html">社群分享與資料副作用</a><a  href="../app/index.html">iOS App：共用畫面與原生邊界</a><a  href="../app/native-flows.html">原生登入、通知與資料流</a><hr><a href="../legacy.html">舊索引與詳細附錄</a></aside><main id="main"><p class="eyebrow">V1 / 歷史詳細附錄</p><p class="risks">保留原始分析，內含尚未採納的重構建議與舊發布說明。現行導航與維護方式請以根目錄 README 為準；v2 仍空白。下方 Mermaid 為原始圖碼，新版已將主要流程重畫為可直接瀏覽的圖。</p><h1 id="回顧門檻-快取-防重與補做">回顧門檻、快取、防重與補做</h1>
+<p><a href="../README.html">回索引</a> · 基準 <code>1e2f8cd</code> · 2026-09-14</p>
+<h2 id="四種報告是四套期間規則">四種報告是四套期間規則</h2>
+<table><thead><tr><th>review_type</th><th>後端判斷</th><th>快取與失敗行為</th></tr></thead><tbody><tr><td><code>overall</code></td><td>日記總筆數達設定門檻；取前 <code>floor(n/threshold)*threshold</code> 筆</td><td>期間起點為第一筆日期；AI 失敗可存 fallback</td></tr><tr><td><code>weekly</code></td><td>累積滿 7 個不同 <code>entry_date</code>，取最近一組完整 7 日</td><td>不保證是連續日或日曆週；AI 失敗可存 fallback</td></tr><tr><td><code>gratitude_weekly</code></td><td>傳入起日到第 6 天，至少 3 筆 <code>practice_type=gratitude</code></td><td>有快取先回；AI 失敗可存 fallback</td></tr><tr><td><code>weekly_digest</code></td><td>傳入起日到第 6 天，至少 2 筆日記；不限感恩類型</td><td>v4 快取直接回；AI 失敗不新增快取</td></tr></tbody></table>
+<p><code>weekly_digest</code> 用台灣時間判斷週日；非週日且區間尚未結束時，有舊快取回舊快取，否則 409。 既有 v4 快取在這項時間判斷前返回，但會先讀日記、檢查至少 2 筆。 兩個內建週報端點只檢查日期字串可解析，沒有強制 <code>period_start</code> 必須是週一；任意起日／未來期間應列入契約驗證。</p>
+<h2 id="觸發位置">觸發位置</h2>
+<p>首頁呼叫 <code>checkAndGenerateReviews()</code>，用本地每日標記避免一直檢查；專業日記提交時也判斷門檻。 本地標記先寫、後發請求，同日失敗可能不再由該首頁檢查重試。 一週回顧頁透過 <code>requestWeeklyDigest()</code> 要求生成。這條路徑未見 Python 排程器或持久工作佇列。 儲存庫雖有其他用途的 DB cron，不能據此推論週回顧已有定時生成保障。</p>
+<pre class="language-mermaid"><code>flowchart LR
+  UI[開頁 / 日記提交] --&gt; CHECK[檢查門檻與查快取]
+  CHECK --&gt;|已有| OLD[回既有報告]
+  CHECK --&gt;|沒有且符合| AI[呼叫 AI]
+  AI --&gt; WRITE[INSERT / PATCH pro_reviews]
+  WRITE --&gt; RESULT[回報告或部分路徑回未快取結果]</code></pre>
+<h2 id="靜態分析找到的三個防重-失效問題">靜態分析找到的三個防重／失效問題</h2>
+<ol><li><strong>NULL 讓內建報告的唯一性有缺口。</strong> SQL 是 <code>UNIQUE(user_id,module_id,review_type,period_start)</code>，內建報告的 <code>module_id=NULL</code>。普通 UNIQUE 允許此類 NULL 重複，掃描儲存庫沒有找到補上的 partial unique index 或 <code>NULLS NOT DISTINCT</code>。線上是否另有修補待查。</li><li><strong>先查再做 AI 不能防止重複成本。</strong> 兩個請求都可能查不到報告並各做一次 AI；即使最後 INSERT 受唯一約束保護，費用仍已發生。</li><li><strong><code>overall</code> 快取鍵未表達累積批次。</strong> 例如門檻 3：3 筆與 6 筆的 <code>period_start</code> 都是第一筆日期，第二次可能直接回 3 筆時的舊報告。v4 digest 也直接回快取，不因同週後續新增內容自動失效。</li></ol>
+<p>前兩者的約束缺口與第三者的程式分支可由原始碼推得，尚未執行併發或線上資料驗證。</p>
+<h2 id="補做腳本不能直接當正式補償流程">補做腳本不能直接當正式補償流程</h2>
+<p><code>backfill_weekly_digest.py</code> 指向 localhost、使用固定日期列表；<code>user_id</code> 只用於輸出，實際身分來自 token。 它把輸入日期直接減 6 天當成週一，卻未驗證輸入真的是週日。不能不經修正就拿來建立排程或大量補做。</p>
+<h2 id="提案與驗收">提案與驗收</h2>
+<p>先定義產品要「固定週報快照」還是「隨內容更新」；為報告加入期間規則與輸入版本。 內建與模組報告分別建立有效唯一鍵，清查重複資料後再加約束。 需保證生成的流程建立持久 job，以原子 claim、租約、有限重試與失敗狀態避免失聯；可沿用 Postgres 起步。 任務唯一鍵與報告唯一鍵都要設計，不能僅靠最後一刻的 INSERT。</p>
+<p>驗收：同鍵併發只啟動一次有效生成；worker 中止可補做；3→6 筆的 overall 按產品規則產生新版本； 台灣跨週、不同日期數與多筆同日紀錄皆有案例；AI 降級結果可被辨識並依規則重試。</p>
+<h2 id="檔案索引">檔案索引</h2>
+<ul><li><code>FastAPI · MindGym/backend/app.py</code>：<code>_find_existing_review</code>、<code>_insert_review</code> 與三個 review endpoints。</li><li><code>前端觸發 · MindGym/src/lib/reviews.ts</code>、<code>首頁 · MindGym/src/routes/app.home.tsx</code>、<code>一週回顧頁 · MindGym/src/routes/app.weekly-review.tsx</code>。</li><li><code>報告資料表 · MindGym/supabase/pro_modules_v2.sql</code>、<code>digest CHECK migration · MindGym/supabase/weekly_digest.sql</code>。</li><li><code>補做腳本 · MindGym/backend/backfill_weekly_digest.py</code>。</li></ul><footer>依 MindGym commit 1e2f8cd · 2026-09-14 靜態分析。圖中箭頭表示資料或控制流；非正式環境與真機驗證。</footer></main></div></body></html>

@@ -1,0 +1,24 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>目標架構、遷移順序與驗收清單 · MindGym</title><link rel="stylesheet" href="../../assets/site.css"></head><body><a class="skip" href="#main">跳至內容</a><header><a class="brand" href="../../index.html">MindGym <span>Architecture atlas</span></a><nav><a href="../index.html">V1 現況</a><a href="../web/index.html">Web</a><a href="../app/index.html">App</a><span>V2 待設計</span></nav></header><div class="layout"><aside><small>探索現有系統</small><a  href="../index.html">現況系統地圖</a><a  href="../web/index.html">Web 畫面與業務入口</a><a  href="../web/practice.html">測驗與日常練習</a><a  href="../web/reviews.html">回顧如何被觸發</a><a  href="../web/professional.html">模組發布與個案回饋</a><a  href="../web/community.html">社群分享與資料副作用</a><a  href="../app/index.html">iOS App：共用畫面與原生邊界</a><a  href="../app/native-flows.html">原生登入、通知與資料流</a><hr><a href="../legacy.html">舊索引與詳細附錄</a></aside><main id="main"><p class="eyebrow">V1 / 歷史詳細附錄</p><p class="risks">保留原始分析，內含尚未採納的重構建議與舊發布說明。現行導航與維護方式請以根目錄 README 為準；v2 仍空白。下方 Mermaid 為原始圖碼，新版已將主要流程重畫為可直接瀏覽的圖。</p><h1 id="目標架構-遷移順序與驗收清單">目標架構、遷移順序與驗收清單</h1>
+<p><a href="../README.html">回索引</a> · 設計提案，尚未實作 · 2026-09-14</p>
+<h2 id="先按照業務分責任">先按照業務分責任</h2>
+<p>建議以模組化單體起步，共用一個部署與資料庫，每個模組管理自己的寫入規則。 理由是目前核心問題在同一條業務跨前端、handler、SQL 的成功定義與交易邊界，而非已證實的獨立擴容需求。</p>
+<table><thead><tr><th>模組</th><th>擁有的決策</th><th>主要資料／輸出</th></tr></thead><tbody><tr><td>Identity &amp; Entitlements</td><td>actor、角色、有效權益</td><td>Auth adapter、user_roles、subscriptions</td></tr><tr><td>Assessment &amp; Practice</td><td>完成作答、保存、練習種類與版本</td><td>perma_scores、練習原始紀錄；專業紀錄需 enrollment 授權</td></tr><tr><td>Professional Modules</td><td>草稿版本、送審、發布、邀請與加入</td><td>pro_modules、review_log、invite_codes、enrollments</td></tr><tr><td>Reviews</td><td>期間、門檻、報告版本、重做與快取</td><td>pro_reviews、生成工作</td></tr><tr><td>Safety</td><td>判讀狀態、答案版本、警示與處理</td><td>safety 工作、crisis_alerts</td></tr><tr><td>Community</td><td>分享可見性、互動、審查與檢舉</td><td>分享內容、likes、comments、moderation</td></tr></tbody></table>
+<p>上表是目標責任，不是宣稱目前已有這些模組。<code>gratitude_entries</code> 同時負擔練習與社群， 第一階段先以不同 repository 操作限制欄位與用途，再評估是否拆資料表，避免立刻複製一整份日記。 跨模組需要透過用例／明確查詢介面溝通；同交易的必要寫入由 transaction boundary 協調。</p>
+<pre class="language-mermaid"><code>flowchart TD
+  R[HTTP routes：輸入 / 輸出與 actor] --&gt; U[業務用例：完成練習、送審、生成回顧]
+  U --&gt; D[領域規則：狀態、版本、期間、權益]
+  U --&gt; P[介面：Repository / AI / JobStore / Notification]
+  P --&gt; I[Adapters：Supabase RPC 或 SQL / Claude / APNs]
+  J[Worker：claim 與重試] --&gt; U</code></pre>
+<p>Route 不直接拼 prompt／REST query；AI adapter 回傳可驗證的結果與用量；Repository 統一檢查 HTTP 錯誤。 用例定義交易邊界，AI 網路呼叫放在交易之外，完成後以版本／狀態條件提交。 持久工作的租約、失敗狀態與重試上限是新增設計，可先用 Postgres 實作，不預設必須加 broker。</p>
+<h2 id="分階段完成-而不是一次重寫">分階段完成，而不是一次重寫</h2>
+<table><thead><tr><th>階段</th><th>工作</th><th>完成條件</th></tr></thead><tbody><tr><td>0：建立基線</td><td>匯出線上 schema／RLS／grants／函式／cron／部署設定；記錄端點與主要前端呼叫；建立固定去識別測試資料</td><td>儲存庫與部署差異已列出；每條核心流程有已知輸入輸出與失敗案例</td></tr><tr><td>1：補可信契約</td><td>HTTP 錯誤統一、保存結果可辨識、限制已讀欄位更新、確認並修正報告唯一鍵、安全 failed 不混成 none</td><td>針對性回歸測試通過；資料修復方案可回復；不擅改發布與收費政策</td></tr><tr><td>2：抽取模組</td><td>先抽 auth、AI、repository，再按用例搬出 handler</td><td>URL／DTO 與讀取權限相容；不存在 handler 繞過用例的第二套規則</td></tr><tr><td>3：垂直試點</td><td>專業日記保存＋持久安全工作；AI 回饋接續處理，前端改讀處理狀態</td><td>同一提交一次保存；關頁與重啟可補做；前端 fallback 與新流程銜接完成</td></tr><tr><td>4：擴大遷移</td><td>模組版本送審交易、週回顧生成工作、PERMA 保存契約、其他練習寫入</td><td>每條切換的流程都有唯一寫入入口、併發防重與資料核對</td></tr><tr><td>5：收斂部署</td><td>版本化 migration、CI、監測、補做／回復操作文件；清除已確認無使用的舊路徑</td><td>可重建環境、演練 rollback；舊呼叫量歸零後才撤舊入口</td></tr></tbody></table>
+<p>階段 1 的安全判讀回應調整要與前端一起部署，不能只改 API enum 讓舊畫面誤判。 階段 3 涉及重要流程，先在測試資料與受控環境驗證，再切換實際寫入。</p>
+<h2 id="切換時的資料策略">切換時的資料策略</h2>
+<p>每條用例建立開關或相容路由，同一使用者／操作只走一個寫入者。可以比對新舊讀取結果， 但不要同時呼叫兩次 AI 或把原始紀錄雙寫當成驗證。 先加相容欄位與工作表，再部署讀寫相容程式，核對筆數／唯一鍵／權限後才收回舊寫入權限。 回復時保留新欄位與已保存結果，停用新入口或 worker，依預先演練的相容路徑回切，不靠刪除資料回復。</p>
+<h2 id="第一批必要驗收案例">第一批必要驗收案例</h2>
+<ul><li>業務：PERMA 報告可再讀；同日多筆日記合法；overall 3→6 筆與 7 個不同日期符合定義。</li><li>可靠性：AI timeout、DB 非 2xx、重送、兩請求併發、程序中止均有明確結果與補救。</li><li>授權：本人／他人／專業夥伴／管理員分開驗證；service key 路徑與 RLS 路徑都覆蓋；未發布報告不可見。</li><li>交易：送審狀態與軌跡同成敗；已保存答案必有可追蹤安全工作；警示重試不重複。</li><li>產品相容：目前登入者 Pro 權益保持一致；私人內容不意外公開；一般通知故障不讓練習或留言消失。</li></ul>
+<h2 id="已知限制與仍需決策的部分">已知限制與仍需決策的部分</h2>
+<p>本次完成靜態程式／SQL 與跨前端呼叫分析，未呼叫正式 API、未讀私密環境設定、未驗證線上 grants， 也沒有執行 AI、套用 migration 或修改 MindGym 程式。未在 <code>backend/</code> 發現自動化測試檔案， 不代表外部部署流程沒有測試。</p>
+<p>正式實作前需定案：週報要固定快照或隨資料更新、未保存報告是否允許預覽、 安全判讀失敗／風險結果與人工發布的關係，以及通知／成本記錄要求的可靠性。 這些會改變業務行為，應形成明確決策紀錄，再據此寫契約測試。</p>
+<p>證據與逐流程驗收見 <a href="01-system-boundaries.html">現況全貌</a>、<a href="02-assessment-and-practice.html">日常練習</a>、 <a href="03-reviews-and-jobs.html">週回顧</a>、<a href="04-professional-modules.html">專業模組</a>、 <a href="05-safety-and-release.html">安全與發布</a>、<a href="06-community-and-platform.html">社群與平台</a>。</p><footer>依 MindGym commit 1e2f8cd · 2026-09-14 靜態分析。圖中箭頭表示資料或控制流；非正式環境與真機驗證。</footer></main></div></body></html>
